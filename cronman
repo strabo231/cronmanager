@@ -247,12 +247,13 @@ validate_schedule() {
     local month="${fields[3]}"
     local weekday="${fields[4]}"
     
-    # Simple pattern check
-    if [[ ! $minute =~ ^(\*|[0-9\-,/]+)$ ]] || \
-       [[ ! $hour =~ ^(\*|[0-9\-,/]+)$ ]] || \
-       [[ ! $day =~ ^(\*|[0-9\-,/]+)$ ]] || \
-       [[ ! $month =~ ^(\*|[0-9\-,/]+)$ ]] || \
-       [[ ! $weekday =~ ^(\*|[0-9\-,/]+)$ ]]; then
+    # Simple pattern check - very permissive, just check for valid characters
+    # Allow: *, digits, hyphens, commas, slashes
+    if [[ ! $minute =~ ^[0-9*,/-]+$ ]] || \
+       [[ ! $hour =~ ^[0-9*,/-]+$ ]] || \
+       [[ ! $day =~ ^[0-9*,/-]+$ ]] || \
+       [[ ! $month =~ ^[0-9*,/-]+$ ]] || \
+       [[ ! $weekday =~ ^[0-9*,/-]+$ ]]; then
         print_error "Invalid schedule format"
         return 1
     fi
