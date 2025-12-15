@@ -1,3 +1,5 @@
+![Tests](https://github.com/strabo231/cronmanager/workflows/Test%20CronManager/badge.svg)
+
 # CronManager - User-Friendly Cron Job Management
 
 Finally, a cron interface that doesn't make you want to pull your hair out! CronManager brings modern, intuitive management to cron jobs.
