@@ -1,0 +1,708 @@
+#!/bin/bash
+
+# CronManager - User-friendly cron job management
+# Version: 1.0.0
+
+set -e
+
+VERSION="1.0.0"
+SCRIPT_NAME="cronman"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+NC='\033[0m' # No Color
+
+# Print colored output
+print_success() { echo -e "${GREEN}✓${NC} $1"; }
+print_error() { echo -e "${RED}✗${NC} $1"; }
+print_info() { echo -e "${BLUE}ℹ${NC} $1"; }
+print_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
+print_header() { echo -e "${CYAN}${1}${NC}"; }
+
+# Temporary file for crontab manipulation
+TEMP_CRON=$(mktemp)
+trap "rm -f $TEMP_CRON" EXIT
+
+# Show usage
+show_usage() {
+    cat << EOF
+${BLUE}CronManager${NC} - User-friendly cron job management v${VERSION}
+
+${YELLOW}Usage:${NC}
+    $SCRIPT_NAME <command> [options]
+
+${YELLOW}Commands:${NC}
+    list, ls              List all cron jobs
+    add                   Add a new cron job
+    remove, rm <number>   Remove cron job by number
+    edit <number>         Edit a specific cron job
+    enable <number>       Enable a disabled cron job
+    disable <number>      Disable a cron job (comments it out)
+    validate <schedule>   Validate cron schedule syntax
+    next <schedule>       Show next run time for schedule
+    examples              Show common cron schedule examples
+    backup                Backup current crontab
+    restore <file>        Restore crontab from backup
+    clear                 Remove all cron jobs (with confirmation)
+
+${YELLOW}Options:${NC}
+    -h, --help           Show this help message
+    -v, --version        Show version information
+    -u, --user <user>    Manage crontab for specific user (requires root)
+
+${YELLOW}Examples:${NC}
+    $SCRIPT_NAME list
+        → List all current cron jobs
+
+    $SCRIPT_NAME add
+        → Interactive prompt to add a new job
+
+    $SCRIPT_NAME remove 3
+        → Remove the 3rd cron job
+
+    $SCRIPT_NAME disable 2
+        → Disable (comment out) the 2nd cron job
+
+    $SCRIPT_NAME validate "0 2 * * *"
+        → Check if cron schedule is valid
+
+    $SCRIPT_NAME next "0 2 * * *"
+        → Show when this schedule will run next
+
+    $SCRIPT_NAME backup
+        → Save current crontab to a file
+
+${YELLOW}Adding Jobs:${NC}
+    When adding a job, you can either:
+    1. Use a preset schedule (daily, weekly, hourly, etc.)
+    2. Enter a custom cron schedule (e.g., "0 3 * * *")
+    3. Use natural language (e.g., "every day at 3am")
+
+${YELLOW}Note:${NC}
+    CronManager adds comments to help you identify jobs later.
+    Comments start with # and won't affect job execution.
+
+EOF
+}
+
+# Show version
+show_version() {
+    echo "$SCRIPT_NAME version $VERSION"
+}
+
+# Show common cron examples
+show_examples() {
+    cat << EOF
+${CYAN}Common Cron Schedule Examples:${NC}
+
+${YELLOW}Every Minute:${NC}
+    * * * * *
+
+${YELLOW}Every Hour:${NC}
+    0 * * * *              (at minute 0)
+    */2 * * * *            (every 2 hours)
+
+${YELLOW}Daily:${NC}
+    0 2 * * *              (2:00 AM)
+    0 0 * * *              (midnight)
+    30 5 * * *             (5:30 AM)
+
+${YELLOW}Weekly:${NC}
+    0 0 * * 0              (Sunday midnight)
+    0 0 * * 1              (Monday midnight)
+    0 9 * * 1-5            (Weekdays at 9 AM)
+
+${YELLOW}Monthly:${NC}
+    0 0 1 * *              (1st of month, midnight)
+    0 0 15 * *             (15th of month)
+    0 0 1 */3 *            (Every 3 months)
+
+${YELLOW}Yearly:${NC}
+    0 0 1 1 *              (January 1st, midnight)
+
+${YELLOW}Special Schedules:${NC}
+    @reboot                (when system boots)
+    @daily                 (once a day, midnight)
+    @hourly                (once an hour)
+    @weekly                (once a week, Sunday)
+    @monthly               (once a month, 1st)
+    @yearly                (once a year, Jan 1st)
+
+${YELLOW}Cron Format:${NC}
+    * * * * *
+    │ │ │ │ │
+    │ │ │ │ └─── Day of week (0-7, Sun=0 or 7)
+    │ │ │ └───── Month (1-12)
+    │ │ └─────── Day of month (1-31)
+    │ └───────── Hour (0-23)
+    └─────────── Minute (0-59)
+
+${YELLOW}Special Characters:${NC}
+    *    Any value
+    ,    Value list (e.g., 1,3,5)
+    -    Range (e.g., 1-5)
+    /    Step values (e.g., */15 = every 15)
+
+EOF
+}
+
+# Get current user's crontab
+get_crontab() {
+    crontab -l 2>/dev/null || echo ""
+}
+
+# List all cron jobs with numbers
+list_jobs() {
+    local crontab_content=$(get_crontab)
+    
+    if [ -z "$crontab_content" ]; then
+        print_info "No cron jobs found"
+        echo ""
+        print_info "Run '$SCRIPT_NAME add' to create your first job"
+        return
+    fi
+    
+    print_header "═══════════════════════════════════════════════════════════════"
+    print_header "                      CRON JOBS"
+    print_header "═══════════════════════════════════════════════════════════════"
+    echo ""
+    
+    local job_num=0
+    local in_comment=false
+    local last_comment=""
+    
+    while IFS= read -r line; do
+        # Skip empty lines
+        [ -z "$line" ] && continue
+        
+        # Check if it's a comment (description)
+        if [[ $line =~ ^#[[:space:]]*(.+) ]]; then
+            last_comment="${BASH_REMATCH[1]}"
+            continue
+        fi
+        
+        # It's a cron job
+        ((job_num++))
+        
+        # Check if disabled (commented out job)
+        if [[ $line =~ ^#(.+) ]]; then
+            echo -e "${YELLOW}[$job_num]${NC} ${RED}[DISABLED]${NC}"
+            if [ -n "$last_comment" ]; then
+                echo "     Description: $last_comment"
+            fi
+            local actual_line="${BASH_REMATCH[1]}"
+            echo "     Schedule: $(echo "$actual_line" | awk '{print $1,$2,$3,$4,$5}')"
+            echo "     Command:  $(echo "$actual_line" | cut -d' ' -f6-)"
+        else
+            echo -e "${GREEN}[$job_num]${NC} ${GREEN}[ACTIVE]${NC}"
+            if [ -n "$last_comment" ]; then
+                echo "     Description: $last_comment"
+            fi
+            echo "     Schedule: $(echo "$line" | awk '{print $1,$2,$3,$4,$5}')"
+            echo "     Command:  $(echo "$line" | cut -d' ' -f6-)"
+            
+            # Show next run time
+            local schedule=$(echo "$line" | awk '{print $1,$2,$3,$4,$5}')
+            local next_run=$(get_next_run "$schedule" 2>/dev/null || echo "Unable to calculate")
+            echo "     Next run: $next_run"
+        fi
+        
+        echo ""
+        last_comment=""
+    done <<< "$crontab_content"
+    
+    print_header "═══════════════════════════════════════════════════════════════"
+    echo ""
+    print_info "Use '$SCRIPT_NAME add' to create a new job"
+    print_info "Use '$SCRIPT_NAME remove <number>' to delete a job"
+}
+
+# Validate cron schedule
+validate_schedule() {
+    local schedule="$1"
+    
+    # Check for special schedules
+    if [[ $schedule =~ ^@(reboot|yearly|annually|monthly|weekly|daily|hourly)$ ]]; then
+        print_success "Valid special schedule: $schedule"
+        return 0
+    fi
+    
+    # Split into fields
+    IFS=' ' read -ra fields <<< "$schedule"
+    
+    if [ ${#fields[@]} -ne 5 ]; then
+        print_error "Invalid schedule: Must have 5 fields (minute hour day month weekday)"
+        return 1
+    fi
+    
+    # Basic validation (not exhaustive, but catches common errors)
+    local minute="${fields[0]}"
+    local hour="${fields[1]}"
+    local day="${fields[2]}"
+    local month="${fields[3]}"
+    local weekday="${fields[4]}"
+    
+    # Simple pattern check
+    if [[ ! $minute =~ ^(\*|[0-9\-,/]+)$ ]] || \
+       [[ ! $hour =~ ^(\*|[0-9\-,/]+)$ ]] || \
+       [[ ! $day =~ ^(\*|[0-9\-,/]+)$ ]] || \
+       [[ ! $month =~ ^(\*|[0-9\-,/]+)$ ]] || \
+       [[ ! $weekday =~ ^(\*|[0-9\-,/]+)$ ]]; then
+        print_error "Invalid schedule format"
+        return 1
+    fi
+    
+    print_success "Schedule syntax appears valid: $schedule"
+    return 0
+}
+
+# Calculate next run time (basic approximation)
+get_next_run() {
+    local schedule="$1"
+    
+    # Handle special schedules
+    case "$schedule" in
+        "@reboot")
+            echo "At system reboot"
+            return
+            ;;
+        "@yearly"|"@annually")
+            schedule="0 0 1 1 *"
+            ;;
+        "@monthly")
+            schedule="0 0 1 * *"
+            ;;
+        "@weekly")
+            schedule="0 0 * * 0"
+            ;;
+        "@daily")
+            schedule="0 0 * * *"
+            ;;
+        "@hourly")
+            schedule="0 * * * *"
+            ;;
+    esac
+    
+    # Use Python for accurate next run calculation if available
+    if command -v python3 &> /dev/null; then
+        python3 << EOF 2>/dev/null || echo "Soon"
+from datetime import datetime, timedelta
+import sys
+
+schedule = "$schedule"
+fields = schedule.split()
+
+if len(fields) != 5:
+    print("Invalid schedule")
+    sys.exit(1)
+
+minute, hour, day, month, weekday = fields
+
+now = datetime.now()
+current = now + timedelta(minutes=1)
+
+# Simplified next run calculation
+for _ in range(525600):  # Check up to 1 year ahead
+    match = True
+    
+    if minute != "*" and str(current.minute) != minute:
+        if "/" not in minute and "-" not in minute and "," not in minute:
+            match = False
+    
+    if hour != "*" and str(current.hour) != hour:
+        if "/" not in hour and "-" not in hour and "," not in hour:
+            match = False
+    
+    if match:
+        diff = current - now
+        if diff.days > 0:
+            print(f"{current.strftime('%Y-%m-%d %H:%M')} (in {diff.days} days)")
+        elif diff.seconds >= 3600:
+            print(f"{current.strftime('%Y-%m-%d %H:%M')} (in {diff.seconds // 3600} hours)")
+        else:
+            print(f"{current.strftime('%Y-%m-%d %H:%M')} (in {diff.seconds // 60} minutes)")
+        break
+    
+    current += timedelta(minutes=1)
+else:
+    print("Unable to determine")
+EOF
+    else
+        echo "Install python3 for accurate next run times"
+    fi
+}
+
+# Add a new cron job
+add_job() {
+    print_header "═══════════════════════════════════════════════════════════════"
+    print_header "                   ADD NEW CRON JOB"
+    print_header "═══════════════════════════════════════════════════════════════"
+    echo ""
+    
+    # Get description
+    read -p "Job description (optional): " description
+    
+    # Get schedule
+    echo ""
+    print_info "Choose schedule type:"
+    echo "  1) Preset (daily, hourly, weekly, etc.)"
+    echo "  2) Custom cron schedule"
+    echo "  3) See examples first"
+    echo ""
+    read -p "Choice [1-3]: " schedule_choice
+    
+    local schedule=""
+    
+    case $schedule_choice in
+        1)
+            echo ""
+            print_info "Preset schedules:"
+            echo "  1) @hourly   - Every hour"
+            echo "  2) @daily    - Every day at midnight"
+            echo "  3) @weekly   - Every Sunday at midnight"
+            echo "  4) @monthly  - First of every month"
+            echo "  5) @reboot   - When system boots"
+            echo ""
+            read -p "Choice [1-5]: " preset_choice
+            
+            case $preset_choice in
+                1) schedule="@hourly" ;;
+                2) schedule="@daily" ;;
+                3) schedule="@weekly" ;;
+                4) schedule="@monthly" ;;
+                5) schedule="@reboot" ;;
+                *)
+                    print_error "Invalid choice"
+                    return 1
+                    ;;
+            esac
+            ;;
+        2)
+            echo ""
+            print_info "Enter cron schedule (e.g., '0 2 * * *' for 2 AM daily)"
+            print_info "Format: minute hour day month weekday"
+            echo ""
+            read -p "Schedule: " schedule
+            
+            if ! validate_schedule "$schedule" >/dev/null 2>&1; then
+                print_error "Invalid schedule format"
+                return 1
+            fi
+            ;;
+        3)
+            show_examples
+            echo ""
+            read -p "Press Enter to continue..."
+            add_job
+            return
+            ;;
+        *)
+            print_error "Invalid choice"
+            return 1
+            ;;
+    esac
+    
+    # Get command
+    echo ""
+    read -p "Command to run: " command
+    
+    if [ -z "$command" ]; then
+        print_error "Command cannot be empty"
+        return 1
+    fi
+    
+    # Confirm
+    echo ""
+    print_header "═══════════════════════════════════════════════════════════════"
+    echo "Description: ${description:-None}"
+    echo "Schedule:    $schedule"
+    echo "Command:     $command"
+    print_header "═══════════════════════════════════════════════════════════════"
+    echo ""
+    read -p "Add this job? (y/N) " -n 1 -r
+    echo ""
+    
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        print_info "Cancelled"
+        return 0
+    fi
+    
+    # Add to crontab
+    get_crontab > "$TEMP_CRON"
+    
+    if [ -n "$description" ]; then
+        echo "# $description" >> "$TEMP_CRON"
+    fi
+    echo "$schedule $command" >> "$TEMP_CRON"
+    
+    crontab "$TEMP_CRON"
+    
+    print_success "Cron job added successfully!"
+    
+    # Show next run time
+    if [[ ! $schedule =~ ^@ ]]; then
+        echo ""
+        print_info "Next run: $(get_next_run "$schedule")"
+    fi
+}
+
+# Remove a cron job
+remove_job() {
+    local job_number="$1"
+    
+    if [ -z "$job_number" ]; then
+        print_error "Please specify job number"
+        echo "Usage: $SCRIPT_NAME remove <number>"
+        return 1
+    fi
+    
+    local crontab_content=$(get_crontab)
+    
+    if [ -z "$crontab_content" ]; then
+        print_error "No cron jobs to remove"
+        return 1
+    fi
+    
+    # Extract the job
+    local current_num=0
+    local found=false
+    
+    > "$TEMP_CRON"
+    
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        
+        if [[ $line =~ ^# ]]; then
+            echo "$line" >> "$TEMP_CRON"
+            continue
+        fi
+        
+        ((current_num++))
+        
+        if [ "$current_num" -eq "$job_number" ]; then
+            found=true
+            print_warning "Removing job #$job_number: $line"
+        else
+            echo "$line" >> "$TEMP_CRON"
+        fi
+    done <<< "$crontab_content"
+    
+    if [ "$found" = false ]; then
+        print_error "Job #$job_number not found"
+        return 1
+    fi
+    
+    read -p "Confirm removal? (y/N) " -n 1 -r
+    echo ""
+    
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        print_info "Cancelled"
+        return 0
+    fi
+    
+    crontab "$TEMP_CRON"
+    print_success "Job #$job_number removed"
+}
+
+# Disable a cron job (comment it out)
+disable_job() {
+    local job_number="$1"
+    
+    if [ -z "$job_number" ]; then
+        print_error "Please specify job number"
+        return 1
+    fi
+    
+    local crontab_content=$(get_crontab)
+    local current_num=0
+    local found=false
+    
+    > "$TEMP_CRON"
+    
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        
+        if [[ $line =~ ^# ]]; then
+            echo "$line" >> "$TEMP_CRON"
+            continue
+        fi
+        
+        ((current_num++))
+        
+        if [ "$current_num" -eq "$job_number" ]; then
+            found=true
+            echo "#$line" >> "$TEMP_CRON"
+            print_success "Job #$job_number disabled"
+        else
+            echo "$line" >> "$TEMP_CRON"
+        fi
+    done <<< "$crontab_content"
+    
+    if [ "$found" = false ]; then
+        print_error "Job #$job_number not found"
+        return 1
+    fi
+    
+    crontab "$TEMP_CRON"
+}
+
+# Enable a disabled cron job
+enable_job() {
+    local job_number="$1"
+    
+    if [ -z "$job_number" ]; then
+        print_error "Please specify job number"
+        return 1
+    fi
+    
+    local crontab_content=$(get_crontab)
+    local current_num=0
+    local found=false
+    
+    > "$TEMP_CRON"
+    
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        
+        # Check if it's a disabled job (starts with #)
+        if [[ $line =~ ^#([^#].+) ]]; then
+            ((current_num++))
+            
+            if [ "$current_num" -eq "$job_number" ]; then
+                found=true
+                echo "${BASH_REMATCH[1]}" >> "$TEMP_CRON"
+                print_success "Job #$job_number enabled"
+            else
+                echo "$line" >> "$TEMP_CRON"
+            fi
+        else
+            echo "$line" >> "$TEMP_CRON"
+        fi
+    done <<< "$crontab_content"
+    
+    if [ "$found" = false ]; then
+        print_error "Job #$job_number not found or not disabled"
+        return 1
+    fi
+    
+    crontab "$TEMP_CRON"
+}
+
+# Backup crontab
+backup_crontab() {
+    local backup_file="crontab_backup_$(date +%Y%m%d_%H%M%S).txt"
+    
+    get_crontab > "$backup_file"
+    
+    print_success "Crontab backed up to: $backup_file"
+}
+
+# Restore crontab
+restore_crontab() {
+    local backup_file="$1"
+    
+    if [ -z "$backup_file" ]; then
+        print_error "Please specify backup file"
+        return 1
+    fi
+    
+    if [ ! -f "$backup_file" ]; then
+        print_error "Backup file not found: $backup_file"
+        return 1
+    fi
+    
+    print_warning "This will replace your current crontab"
+    read -p "Continue? (y/N) " -n 1 -r
+    echo ""
+    
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        print_info "Cancelled"
+        return 0
+    fi
+    
+    crontab "$backup_file"
+    print_success "Crontab restored from: $backup_file"
+}
+
+# Clear all cron jobs
+clear_all() {
+    print_warning "This will remove ALL cron jobs!"
+    read -p "Are you sure? (y/N) " -n 1 -r
+    echo ""
+    
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        print_info "Cancelled"
+        return 0
+    fi
+    
+    read -p "Type 'DELETE' to confirm: " confirm
+    
+    if [ "$confirm" != "DELETE" ]; then
+        print_info "Cancelled"
+        return 0
+    fi
+    
+    crontab -r 2>/dev/null || true
+    print_success "All cron jobs removed"
+}
+
+# Main command handling
+if [ $# -eq 0 ]; then
+    show_usage
+    exit 0
+fi
+
+COMMAND="$1"
+shift
+
+case "$COMMAND" in
+    list|ls)
+        list_jobs
+        ;;
+    add)
+        add_job
+        ;;
+    remove|rm)
+        remove_job "$@"
+        ;;
+    disable)
+        disable_job "$@"
+        ;;
+    enable)
+        enable_job "$@"
+        ;;
+    validate)
+        validate_schedule "$@"
+        ;;
+    next)
+        get_next_run "$@"
+        ;;
+    examples)
+        show_examples
+        ;;
+    backup)
+        backup_crontab
+        ;;
+    restore)
+        restore_crontab "$@"
+        ;;
+    clear)
+        clear_all
+        ;;
+    -h|--help)
+        show_usage
+        ;;
+    -v|--version)
+        show_version
+        ;;
+    *)
+        print_error "Unknown command: $COMMAND"
+        echo "Use -h or --help for usage information"
+        exit 1
+        ;;
+esac

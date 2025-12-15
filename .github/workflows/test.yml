@@ -1,0 +1,62 @@
+name: Test CronManager
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test on Ubuntu
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Make script executable
+      run: chmod +x cronman
+    
+    - name: Test help command
+      run: ./cronman --help
+    
+    - name: Test version command
+      run: ./cronman --version
+    
+    - name: Test examples command
+      run: ./cronman examples
+    
+    - name: Test validate command
+      run: |
+        ./cronman validate "0 2 * * *"
+        ./cronman validate "@daily"
+        ./cronman validate "@hourly"
+    
+    - name: Test list with no crontab
+      run: ./cronman list || true
+    
+    - name: Install shellcheck
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y shellcheck
+    
+    - name: Run shellcheck
+      run: shellcheck cronman || echo "⚠ Shellcheck warnings (non-blocking)"
+    
+    - name: Verify script structure
+      run: |
+        grep -q "list_jobs()" cronman
+        grep -q "add_job()" cronman
+        grep -q "remove_job()" cronman
+        grep -q "validate_schedule()" cronman
+        echo "✓ Script structure verified"
+    
+    - name: Test Python is available (for next run calculations)
+      run: python3 --version
+    
+    - name: All tests passed
+      run: |
+        echo "================================"
+        echo "✓ All tests passed successfully!"
+        echo "================================"

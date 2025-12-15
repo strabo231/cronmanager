@@ -1,0 +1,18 @@
+# Test files
+test/
+tests/
+*.test
+
+# Crontab backups
+crontab_backup_*.txt
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
