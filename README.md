@@ -19,7 +19,7 @@ Finally, a cron interface that doesn't make you want to pull your hair out! Cron
 ## Installation
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/YOUR_USERNAME/cronmanager/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/strabo231/cronmanager/main/install.sh | bash
 ```
 
 ## Quick Start

@@ -42,7 +42,9 @@ jobs:
         sudo apt-get install -y shellcheck
     
     - name: Run shellcheck
-      run: shellcheck cronman || echo "⚠ Shellcheck warnings (non-blocking)"
+      run: |
+        shellcheck cronman || true
+        echo "✓ Shellcheck completed (warnings are non-blocking)"
     
     - name: Verify script structure
       run: |
